@@ -66,26 +66,27 @@ function [posEst,linVelEst,oriEst,driftEst,...
 if (tm == 0)
     % Do the initialization of your estimator here!
     % initial state mean
-    const=EstimatorConst()
+    const=EstimatorConst();
     
-    posPol = randPos(const.StartRadiusBound) % 1x2 matrix
-    posEst =[posPol(1)*sin(posPol(2)),posPol(1)*cos(posPol(2))]
-    linVelEst = [0.0, 0.0] % 1x2 matrix
+    posPol = randPos(const.StartRadiusBound); % 1x2 matrix pos est in Polar coord
+    posEst =[posPol(1)*sin(posPol(2)),posPol(1)*cos(posPol(2))];
+    linVelEst = [0.0, 0.0]; % 1x2 matrix
     %affine transform uniform rand in [0,1] to [-thetaB,thetaB]
-    oriEst = (2.0*rand() - 1) / const.RotationStartBound % 1x1 matrix
-    driftEst = 0.0 % 1x1 matrix
+    oriEst = (2.0*rand() - 1) / const.RotationStartBound; % 1x1 matrix
+    driftEst = 0.0; % 1x1 matrix
     
     % initial state variance
-    % uniform dist with variance 
-    posVar = [0.0, 0.0] % 1x2 matrix
-    linVelVar = [0.0, 0.0] % 1x2 matrix
-    oriVar =  1.0/12*(2*const.RotationStartBound)^2 % 1x1 matrix uniform distribution variance
-    driftVar = 0.0 % 1x1 matrix
+    % uniform dist with variance
+    posVarFull = uniDisk(const.StartRadiusBound,posPol);
+    posVar = [posVarFull(1,1),posVarFull(2,2)];%[0.0, 0.0]; % 1x2 matrix Not 2x2 ??
+    linVelVar = [0.0, 0.0]; % 1x2 matrix
+    oriVar =  1.0/12*(2*const.RotationStartBound)^2; % 1x1 matrix uniform distribution variance
+    driftVar = 0.0; % 1x1 matrix
     
     % estimator variance init (initial posterior variance)
-    estState.Pm = diag([posVar,oriVar,linVelVar,driftVar]
+    estState.Pm = diag([posVar,oriVar,linVelVar,driftVar]);
     % estimator state
-    estState.xm = [posEst,oriEst,linVelEst,driftEst]
+    estState.xm = [posEst,oriEst,linVelEst,driftEst];
     % time of last update
     estState.tm = tm;
     return;
@@ -99,31 +100,84 @@ estState.tm = tm; % update measurement update time
 
 % prior update
 % get constant for calculation
-Cd = const.dragCoefficient
-Cr = const.rudderCoefficient
-ut = actuate(1)
-ur = actuate(2)
+Cd = estConst.dragCoefficient;
+Cr = estConst.rudderCoefficient;
+ut = actuate(1);
+ur = actuate(2);
+pos_radioA = estConst.pos_radioA;
+pos_radioB = estConst.pos_radioB;
+pos_radioC = estConst.pos_radioC;
+sigmaA2 = estConst.DistNoiseA;
+sigmaB2 = estConst.DistNoiseB;
+sigmaC2 = estConst.DistNoiseC;
+sigmaG2 = estConst.GyroNoise;
+sigmaN2 = estConst.CompassNoise;
 % compute process equation
-tspan = [0,dt]
-[t,y] = ode45(@(t,y) xp(t,y,Cr,Cd,ur,ut),tspan,estState.xm) %y is the process update
+tspan = [tm,tm+dt];
+[txp,xp] = ode45(@(t,y) Xp(t,y,Cr,Cd,ur,ut),tspan,estState.xm); %y is the process update
 
 % define function handle for process variance update
-[tvar,var] = ode45(@(tvar,var) Pp(tvar,var,ut,Cd,t,y),tspan,estState.Pm) %var is the process variance update
+[tvar,var] = ode45(@(tvar,var) Pp(tvar,var,ut,Cd,txp,xp),tspan,estState.Pm); %var is the process variance update
 
 % measurement update
-% compute A(t), L(t) and Qc for measurement update
+% compute H(t) and M(t) for measurement update
+%   Build H which is T x Xp.size
+H = zeros(6,5);
+H(1,:) = [(xp(end,1)-pos_radioA(1))/vecnorm(xp(end,1:2)-pos_radioA),...
+          (xp(end,1)-pos_radioB(1))/vecnorm(xp(end,1:2)-pos_radioB),...
+          (xp(end,1)-pos_radioC(1))/vecnorm(xp(end,1:2)-pos_radioC),0,0];%H is T x Xp
 
+H(2,:) = [(xp(end,2)-pos_radioA(2))/vecnorm(xp(end,1:2)-pos_radioA),...
+          (xp(end,2)-pos_radioB(2))/vecnorm(xp(end,1:2)-pos_radioB),...
+          (xp(end,2)-pos_radioC(2))/vecnorm(xp(end,1:2)-pos_radioC),0,0];
+H(3,:) = [0,0,0,1,1];
+H(4,:) = [0,0,0,0,0];
+H(5,:) = [0,0,0,0,0];
+H(6,:) = [0,0,0,1,0];
+
+%   initialize M
+M = eye(5,5); %identity matrix
+
+%   initialize measurement noise matrix R
+R = [sigmaA2,sigmaB2,sigmaC2,sigmaG2,sigmaN2];
+
+% compute measurement z = h(xp)
+h = zeros(1,5);
+h(1) = sqrt(vecnorm(xp(end,1:2)-pos_radioA));
+h(2) = sqrt(vecnorm(xp(end,1:2)-pos_radioB));
+h(3) = sqrt(vecnorm(xp(end,1:2)-pos_radioC));
+h(4) = xp(end,3) + xp(end,end);
+h(5) = xp(end,3);
+
+z = sense;
+if (isinf(sense(3))) %if measurement C does not exist modify coeffs
+    H(:,3)=[];
+    R(3)=[];
+    M=eye(4,4);
+    h(3) = [];
+    z(3) = [];
+end
+R = diag(R);
+H = transpose(H);
+% compute K(h)
+Ppt = reshape(var(end,:),[6,6]);
+K = Ppt*transpose(H)/(H*Ppt*transpose(H)+M*R*transpose(M));
+
+% compute estimates and variance
+xpt = xp(end,:);
+estState.xm = xpt+(z-h)*transpose(K);
+estState.Pm = (eye(6,6)-K*H)*Ppt;
 % Get resulting estimates and variances
 % Output quantities
 posEst = estState.xm(1:2);
-linVelEst = ...
-oriEst = ...
-driftEst = ...
+linVelEst = estState.xm(4:5);
+oriEst = estState.xm(3);
+driftEst = estState.xm(6);
 
-posVar = ...
-linVelVar = ...
-oriVar = ...
-driftVar = ...
+posVar = [estState.Pm(1,1),estState.Pm(1,1)];
+linVelVar = [estState.Pm(4,4), estState.Pm(5,5)];
+oriVar = estState.Pm(3,3);
+driftVar = estState.Pm(6,6);
 
 end
 
@@ -131,26 +185,27 @@ function dvardt = Pp(t,var,ut,Cd,tx,xp)
 %odefcn to return ode solution of process variances
 
 %find the interpolated time
-xpt = interp1(tx,xp,t)
-dvardt = zeros(6,6)
-dvardt(1) = [0,0,0,1,0,0]
-dvardt(2) = [0,0,0,0,1,0]
-dvardt(3) = [0,0,0,0,0,0]
-dvardt(4) = [0,0,-sin(xpt(3))*tanh(ut),2*Cd*xpt(4),-2*Cd*xpt(5),0]
-dvardt(5) = [0,0,cos(xpt(3))*tanh(ut),2*Cd*xpt(4),-2*Cd*xpt(5),0]
-dvardt(6) = [0,0,0,0,0,0]
+xpt = interp1(tx,xp,t);
+dvardt = zeros(6,6);
+dvardt(1,:) = [0,0,0,1,0,0];
+dvardt(2,:) = [0,0,0,0,1,0];
+dvardt(3,:) = [0,0,0,0,0,0];
+dvardt(4,:) = [0,0,-sin(xpt(3))*tanh(ut),2*Cd*xpt(4),-2*Cd*xpt(5),0];
+dvardt(5,:) = [0,0,cos(xpt(3))*tanh(ut),2*Cd*xpt(4),-2*Cd*xpt(5),0];
+dvardt(6,:) = [0,0,0,0,0,0];
+dvardt = dvardt(:);
 end
 
-function dydt = xp(t,y,Cr,Cd,ur,ut)
+function dydt = Xp(t,y,Cr,Cd,ur,ut)
 %odefcn function to return ode solution of process states
 
-dydt=zeros(6,1)
-dydt(1)=y(4)
-dydt(2)=y(5)
-dydt(3)=Cr*ur
-dydt(4)=cos(y(3))*(tanh(ut)-Cd*(y(4)^2+y(5)^2))
-dydt(5)=sin(y(3))*(tanh(ut)-Cd*(y(4)^2+y(5)^2))
-dydt(6)=0.0
+dydt=zeros(6,1);
+dydt(1)=y(4);
+dydt(2)=y(5);
+dydt(3)=Cr*ur;
+dydt(4)=cos(y(3))*(tanh(ut)-Cd*(y(4)^2+y(5)^2));
+dydt(5)=sin(y(3))*(tanh(ut)-Cd*(y(4)^2+y(5)^2));
+dydt(6)=0.0;
 end
 
 function pos = randPos(rMax)
@@ -166,26 +221,26 @@ r=rMax*sqrt(randn1);
 theta=2.0*pi*randn2;
 
 %initialize pos
-pos=[r,theta]
+pos=[r,theta];
 end
 
 function var = uniDisk(rMax,posPol)
 %Return variance of uniform sampling of disk with radius rMax
 
-r = posPol(1)
-theta=posPol(2)
-varPol = [(rMax)^2/12.0,0.0;(2*pi)^2/12,0.0]
+r = posPol(1);
+theta=posPol(2);
+varPol = [(rMax)^2/12.0,0.0;(2*pi)^2/12,0.0];
 
 %variance pos in polar coordinate
 %var[r]=E[r^2]-E[r]^2, E[r^2]=1/2*R^2, E[r]=2/3*R
 %var[theta] = (2pi-0)^2/12
-varPol = [1.0/18*r^2,0;0,(2*pi)^2/12]
+varPol = [1.0/18*r^2,0;0,(2*pi)^2/12];
 %Jacobian matrix between Polar and Cartesian
-Jab = [cos(theta),-r*sin(theta);sin(theta),r*cos(theta)]
+Jab = [cos(theta),-r*sin(theta);sin(theta),r*cos(theta)];
 
 %variance transformation: var(x,y)=Jab*var(r,theta)*Jab.T
-var = Jab*varPol*transpose(Jab)
+var = Jab*varPol*transpose(Jab);
 
 
-
+end
 
