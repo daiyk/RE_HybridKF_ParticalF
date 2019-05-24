@@ -72,15 +72,16 @@ if (tm == 0)
     posEst =[posPol(1)*sin(posPol(2)),posPol(1)*cos(posPol(2))];
     linVelEst = [0.0, 0.0]; % 1x2 matrix
     %affine transform uniform rand in [0,1] to [-thetaB,thetaB]
-    oriEst = (2.0*rand() - 1) / const.RotationStartBound; % 1x1 matrix
+    oriEst = (2.0*rand() - 1) * const.RotationStartBound; % 1x1 matrix
     driftEst = 0.0; % 1x1 matrix
     
     % initial state variance
     % uniform dist with variance
-    posVarFull = uniDisk(const.StartRadiusBound,posPol);
-    posVar = [posVarFull(1,1),posVarFull(2,2)];%[0.0, 0.0]; % 1x2 matrix Not 2x2 ??
+    % posVarFull = uniDisk(const.StartRadiusBound,posPol);
+    posVar = [0.0, 0.0];%[posVarFull(1,1),posVarFull(2,2)]; % 1x2 matrix Not 2x2 ??
     linVelVar = [0.0, 0.0]; % 1x2 matrix
-    oriVar =  1.0/12*(2*const.RotationStartBound)^2; % 1x1 matrix uniform distribution variance
+    % uniform distribution (b-a)^2*1/12
+    oriVar = 0;%(1.0/12)*(2*const.RotationStartBound)^2; % 1x1 matrix
     driftVar = 0.0; % 1x1 matrix
     
     % estimator variance init (initial posterior variance)
@@ -112,12 +113,17 @@ sigmaB2 = estConst.DistNoiseB;
 sigmaC2 = estConst.DistNoiseC;
 sigmaG2 = estConst.GyroNoise;
 sigmaN2 = estConst.CompassNoise;
+Qd = estConst.DragNoise; % 
+Qr = estConst.RudderNoise; % 
+Qb = estConst.GyroDriftNoise; % 
 % compute process equation
 tspan = [tm,tm+dt];
 [txp,xp] = ode45(@(t,y) Xp(t,y,Cr,Cd,ur,ut),tspan,estState.xm); %y is the process update
 
 % define function handle for process variance update
-[tvar,var] = ode45(@(tvar,var) Pp(tvar,var,ut,Cd,txp,xp),tspan,estState.Pm); %var is the process variance update
+% compute coefficient for variance prediction
+Pm_old = estState.Pm(:);
+[tvar,var] = ode45(@(tvar,var) Pp(tvar,var,ut,Cd,txp,xp),tspan,Pm_old); %var is the process variance update
 
 % measurement update
 % compute H(t) and M(t) for measurement update
@@ -186,12 +192,13 @@ function dvardt = Pp(t,var,ut,Cd,tx,xp)
 
 %find the interpolated time
 xpt = interp1(tx,xp,t);
-dvardt = zeros(6,6);
+Pk = reshape(var,[6,6]);
+dvardt = zeros(36);
 dvardt(1,:) = [0,0,0,1,0,0];
 dvardt(2,:) = [0,0,0,0,1,0];
 dvardt(3,:) = [0,0,0,0,0,0];
-dvardt(4,:) = [0,0,-sin(xpt(3))*tanh(ut),2*Cd*xpt(4),-2*Cd*xpt(5),0];
-dvardt(5,:) = [0,0,cos(xpt(3))*tanh(ut),2*Cd*xpt(4),-2*Cd*xpt(5),0];
+dvardt(4,:) = [0,0,-sin(xpt(3))*tanh(ut),-2*Cd*xpt(4),-2*Cd*xpt(5),0];
+dvardt(5,:) = [0,0,cos(xpt(3))*tanh(ut),-2*Cd*xpt(4),-2*Cd*xpt(5),0];
 dvardt(6,:) = [0,0,0,0,0,0];
 dvardt = dvardt(:);
 end
