@@ -77,15 +77,16 @@ if (tm == 0)
     
     % initial state variance
     % uniform dist with variance
-    % posVarFull = uniDisk(const.StartRadiusBound,posPol);
-    posVar = [0.0, 0.0];%[posVarFull(1,1),posVarFull(2,2)]; % 1x2 matrix Not 2x2 ??
+    %posVarFull = uniDisk(const.StartRadiusBound,posPol);
+    posVar = [0,0];   %[posVarFull(1,1),posVarFull(2,2)]; % 1x2 matrix Not 2x2 ??
     linVelVar = [0.0, 0.0]; % 1x2 matrix
     % uniform distribution (b-a)^2*1/12
     oriVar = 0;%(1.0/12)*(2*const.RotationStartBound)^2; % 1x1 matrix
     driftVar = 0.0; % 1x1 matrix
     
     % estimator variance init (initial posterior variance)
-    estState.Pm = diag([posVar,oriVar,linVelVar,driftVar]);
+     estState.Pm = diag([posVar,oriVar,linVelVar,driftVar]);
+    % estState.Pm = [posVar,oriVar,linVelVar,driftVar];
     % estimator state
     estState.xm = [posEst,oriEst,linVelEst,driftEst];
     % time of last update
@@ -113,33 +114,38 @@ sigmaB2 = estConst.DistNoiseB;
 sigmaC2 = estConst.DistNoiseC;
 sigmaG2 = estConst.GyroNoise;
 sigmaN2 = estConst.CompassNoise;
-Qd = estConst.DragNoise; % 
-Qr = estConst.RudderNoise; % 
-Qb = estConst.GyroDriftNoise; % 
+Qd = estConst.DragNoise; 
+Qr = estConst.RudderNoise; 
+Qb = estConst.GyroDriftNoise; 
 % compute process equation
-tspan = [tm,tm+dt];
+tspan = tm:0.0005:(tm+dt);
 [txp,xp] = ode45(@(t,y) Xp(t,y,Cr,Cd,ur,ut),tspan,estState.xm); %y is the process update
 
 % define function handle for process variance update
-% compute coefficient for variance prediction
-Pm_old = estState.Pm(:);
-[tvar,var] = ode45(@(tvar,var) Pp(tvar,var,ut,Cd,txp,xp),tspan,Pm_old); %var is the process variance update
+% compute Q
+Q = diag([Qr,Qd,Qb]);
+
+[tvar,var] = ode45(@(tvar,var) Pp(tvar,var,ut,Cd,ur,Cr,Q,txp,xp),tspan,estState.Pm(:));%Debug
+%Pm_old = diag(estState.Pm);
+%[tvar,var] = ode45(@(tvar,var) Pp(tvar,var,ut,Cd,ur,Cr,Q,txp,xp),tspan,estState.Pm); %var is the process variance update
+%[tvar,var] = ode45(@(tvar,var) Pp(tvar,var,ut,Cd,ur,Cr,Q,txp,xp),tspan,Pm_old(:));
 
 % measurement update
 % compute H(t) and M(t) for measurement update
-%   Build H which is T x Xp.size
-H = zeros(6,5);
-H(1,:) = [(xp(end,1)-pos_radioA(1))/vecnorm(xp(end,1:2)-pos_radioA),...
-          (xp(end,1)-pos_radioB(1))/vecnorm(xp(end,1:2)-pos_radioB),...
-          (xp(end,1)-pos_radioC(1))/vecnorm(xp(end,1:2)-pos_radioC),0,0];%H is T x Xp
+%   Build H which is Ttimes x 6
+xp_t = xp(end,:);
+H = zeros(5,6);
+H(:,1) = [(xp_t(1)-pos_radioA(1))/(vecnorm(xp_t(1:2)-pos_radioA)+rand()),...
+          (xp_t(1)-pos_radioB(1))/(vecnorm(xp_t(1:2)-pos_radioB)+rand()),...
+          (xp_t(1)-pos_radioC(1))/(vecnorm(xp_t(1:2)-pos_radioC)+rand()),0,0];%H is T x Xp
 
-H(2,:) = [(xp(end,2)-pos_radioA(2))/vecnorm(xp(end,1:2)-pos_radioA),...
-          (xp(end,2)-pos_radioB(2))/vecnorm(xp(end,1:2)-pos_radioB),...
-          (xp(end,2)-pos_radioC(2))/vecnorm(xp(end,1:2)-pos_radioC),0,0];
-H(3,:) = [0,0,0,1,1];
-H(4,:) = [0,0,0,0,0];
-H(5,:) = [0,0,0,0,0];
-H(6,:) = [0,0,0,1,0];
+H(:,2) = [(xp_t(2)-pos_radioA(2))/(vecnorm(xp_t(1:2)-pos_radioA)+rand()),...
+          (xp_t(2)-pos_radioB(2))/(vecnorm(xp_t(1:2)-pos_radioB)+rand()),...
+          (xp_t(2)-pos_radioC(2))/(vecnorm(xp_t(1:2)-pos_radioC)+rand()),0,0];
+H(:,3) = [0,0,0,1,1];
+H(:,4) = [0,0,0,0,0];
+H(:,5) = [0,0,0,0,0];
+H(:,6) = [0,0,0,1,0];
 
 %   initialize M
 M = eye(5,5); %identity matrix
@@ -149,30 +155,35 @@ R = [sigmaA2,sigmaB2,sigmaC2,sigmaG2,sigmaN2];
 
 % compute measurement z = h(xp)
 h = zeros(1,5);
-h(1) = sqrt(vecnorm(xp(end,1:2)-pos_radioA));
-h(2) = sqrt(vecnorm(xp(end,1:2)-pos_radioB));
-h(3) = sqrt(vecnorm(xp(end,1:2)-pos_radioC));
-h(4) = xp(end,3) + xp(end,end);
-h(5) = xp(end,3);
+h(1) = sqrt(vecnorm(xp_t(1:2)-pos_radioA));
+h(2) = sqrt(vecnorm(xp_t(1:2)-pos_radioB));
+h(3) = sqrt(vecnorm(xp_t(1:2)-pos_radioC));
+h(4) = xp_t(3) + xp_t(end);
+h(5) = xp_t(3);
 
 z = sense;
 if (isinf(sense(3))) %if measurement C does not exist modify coeffs
-    H(:,3)=[];
+    H(3,:)=[];
     R(3)=[];
     M=eye(4,4);
     h(3) = [];
     z(3) = [];
 end
 R = diag(R);
-H = transpose(H);
-% compute K(h)
-Ppt = reshape(var(end,:),[6,6]);
-K = Ppt*transpose(H)/(H*Ppt*transpose(H)+M*R*transpose(M));
 
-% compute estimates and variance
-xpt = xp(end,:);
-estState.xm = xpt+(z-h)*transpose(K);
-estState.Pm = (eye(6,6)-K*H)*Ppt;
+% compute K(h)
+%Ppt = diag((diag(reshape(var(end,:),[6,6]))));
+Ppt = reshape(var(end,:),[6,6]); %DEBUG
+K = Ppt*transpose(H)/(H*Ppt*transpose(H)+M*R*transpose(M) + eye(size(M)) * rand());
+
+
+% measurement update
+estState.xm = xp_t+(z-h)*transpose(K);
+%estState.Pm = (eye(6,6)-K*H)*Ppt;%DEBUG
+estState.Pm = diag(diag((eye(6,6)-K*H)*Ppt));
+
+%estState.xm(3)= mod(estState.xm(3),2*pi);
+
 % Get resulting estimates and variances
 % Output quantities
 posEst = estState.xm(1:2);
@@ -180,33 +191,58 @@ linVelEst = estState.xm(4:5);
 oriEst = estState.xm(3);
 driftEst = estState.xm(6);
 
-posVar = [estState.Pm(1,1),estState.Pm(1,1)];
+posVar = [estState.Pm(1,1),estState.Pm(2,2)];%DEBUG
 linVelVar = [estState.Pm(4,4), estState.Pm(5,5)];
 oriVar = estState.Pm(3,3);
 driftVar = estState.Pm(6,6);
+%estState.Pm = diag([posVar,oriVar,linVelVar,driftVar]);
+
+%posVar = estState.Pm(1:2);%DEBUG
+%linVelVar = estState.Pm(4:5);
+%oriVar = estState.Pm(3);
+%driftVar = estState.Pm(6);
+
+
+
 
 end
 
-function dvardt = Pp(t,var,ut,Cd,tx,xp)
+function dvardt = Pp(t,var,ut,Cd,ur,Cr,Q,tx,xp)
 %odefcn to return ode solution of process variances
 
-%find the interpolated time
+%find the interpolated xp
 xpt = interp1(tx,xp,t);
+%reshape variance to recover variance matrix shape
 Pk = reshape(var,[6,6]);
-dvardt = zeros(36);
-dvardt(1,:) = [0,0,0,1,0,0];
-dvardt(2,:) = [0,0,0,0,1,0];
-dvardt(3,:) = [0,0,0,0,0,0];
-dvardt(4,:) = [0,0,-sin(xpt(3))*tanh(ut),-2*Cd*xpt(4),-2*Cd*xpt(5),0];
-dvardt(5,:) = [0,0,cos(xpt(3))*tanh(ut),-2*Cd*xpt(4),-2*Cd*xpt(5),0];
-dvardt(6,:) = [0,0,0,0,0,0];
-dvardt = dvardt(:);
+%Pk = diag(var);DEBUG
+%compute A
+A  =zeros(6,6);
+A(1,:) = [0,0,0,1,0,0];
+A(2,:) = [0,0,0,0,1,0];
+A(3,:) = [0,0,0,0,0,0];
+A(4,:) = [0,0,-sin(xpt(3))*(tanh(ut)-Cd*(xpt(4)^2+xpt(5)^2)),-cos(xpt(3))*2*Cd*xpt(4),-cos(xpt(3))*2*Cd*xpt(5),0];
+A(5,:) = [0,0,cos(xpt(3))*(tanh(ut)-Cd*(xpt(4)^2+xpt(5)^2)),-sin(xpt(3))*2*Cd*xpt(4),-sin(xpt(3))*2*Cd*xpt(5),0];
+A(6,:) = [0,0,0,0,0,0];
+
+%compute L
+L = zeros(6,3);
+L(1,:) = [0,0,0];
+L(2,:) = [0,0,0];
+L(3,:) = [Cr*ur,0,0];
+L(4,:) = [0,-cos(xpt(3))*Cd*(xpt(4)^2+xpt(5)^2),0];
+L(5,:) = [0,-sin(xpt(3))*Cd*(xpt(4)^2+xpt(5)^2),0];
+L(6,:) = [0,0,1];
+      
+%compute derivative of variance matrix at timestep t
+dpdt = A * Pk + Pk * transpose(A) + L*Q*transpose(L);
+%dvardt = diag(dpdt);
+dvardt = dpdt(:);
+
 end
 
 function dydt = Xp(t,y,Cr,Cd,ur,ut)
 %odefcn function to return ode solution of process states
-
-dydt=zeros(6,1);
+dydt = zeros(6,1);
 dydt(1)=y(4);
 dydt(2)=y(5);
 dydt(3)=Cr*ur;

@@ -112,8 +112,8 @@ if doplot
     % x position over time
     figure(2)
     hold all
-    plot(tm, state(:,1),'r.')
-    plot(tm, posEst(:,1),'b.')
+    plot(tm(1:200), state(1:200,1),'r.')
+    plot(tm(1:200), posEst(1:200,1),'b.')
     xlabel('time [s]')
     ylabel('x position [m]')
     legend('true state', 'estimate')
@@ -168,5 +168,7 @@ if doplot
     ylabel('gyro drift [rad]')
     legend('true state', 'estimate')
     grid on
+    
+    
 end
 return;
