@@ -77,7 +77,6 @@ if (tm == 0)
     
     % initial state variance
     % uniform dist with variance
-    %posVarFull = uniDisk(const.StartRadiusBound,posPol);
     posVar = [0,0];   %[posVarFull(1,1),posVarFull(2,2)]; % 1x2 matrix Not 2x2 ??
     linVelVar = [0.0, 0.0]; % 1x2 matrix
     % uniform distribution (b-a)^2*1/12
@@ -97,7 +96,7 @@ end
 %% Estimator iteration.
 
 % get time since last estimator update
-dt = tm - estState.tm;
+dt = estState.tm;
 estState.tm = tm; % update measurement update time
 
 % prior update
@@ -118,14 +117,22 @@ Qd = estConst.DragNoise;
 Qr = estConst.RudderNoise; 
 Qb = estConst.GyroDriftNoise; 
 % compute process equation
-tspan = tm:0.0005:(tm+dt);
-[txp,xp] = ode45(@(t,y) Xp(t,y,Cr,Cd,ur,ut),tspan,estState.xm); %y is the process update
-
-% define function handle for process variance update
+tspan = [dt,tm];
 % compute Q
 Q = diag([Qr,Qd,Qb]);
 
-[tvar,var] = ode45(@(tvar,var) Pp(tvar,var,ut,Cd,ur,Cr,Q,txp,xp),tspan,estState.Pm(:));%Debug
+%concatenate xp and var
+init = [transpose(estState.xm);estState.Pm(:)];
+
+%build matrix for coefficient
+[txp,xp] = ode45(@(t,y) ODEeq(t,y,Cr,Cd,ur,ut,Q),tspan,init); %y is the process update
+
+
+% define function handle for process variance update
+
+%recover variance
+var = reshape(xp(end,7:end),[6,6]);
+%[tvar,var] = ode45(@(tvar,var) Pp(tvar,var,ut,Cd,ur,Cr,Q,txp,xp),tspan,estState.Pm(:));%Debug
 %Pm_old = diag(estState.Pm);
 %[tvar,var] = ode45(@(tvar,var) Pp(tvar,var,ut,Cd,ur,Cr,Q,txp,xp),tspan,estState.Pm); %var is the process variance update
 %[tvar,var] = ode45(@(tvar,var) Pp(tvar,var,ut,Cd,ur,Cr,Q,txp,xp),tspan,Pm_old(:));
@@ -133,15 +140,15 @@ Q = diag([Qr,Qd,Qb]);
 % measurement update
 % compute H(t) and M(t) for measurement update
 %   Build H which is Ttimes x 6
-xp_t = xp(end,:);
+xp_t = xp(end,1:6);
 H = zeros(5,6);
-H(:,1) = [(xp_t(1)-pos_radioA(1))/(vecnorm(xp_t(1:2)-pos_radioA)+rand()),...
-          (xp_t(1)-pos_radioB(1))/(vecnorm(xp_t(1:2)-pos_radioB)+rand()),...
-          (xp_t(1)-pos_radioC(1))/(vecnorm(xp_t(1:2)-pos_radioC)+rand()),0,0];%H is T x Xp
+H(:,1) = [(xp_t(1)-pos_radioA(1))/(vecnorm(xp_t(1:2)-pos_radioA)),...
+          (xp_t(1)-pos_radioB(1))/(vecnorm(xp_t(1:2)-pos_radioB)),...
+          (xp_t(1)-pos_radioC(1))/(vecnorm(xp_t(1:2)-pos_radioC)),0,0];%H is T x Xp
 
-H(:,2) = [(xp_t(2)-pos_radioA(2))/(vecnorm(xp_t(1:2)-pos_radioA)+rand()),...
-          (xp_t(2)-pos_radioB(2))/(vecnorm(xp_t(1:2)-pos_radioB)+rand()),...
-          (xp_t(2)-pos_radioC(2))/(vecnorm(xp_t(1:2)-pos_radioC)+rand()),0,0];
+H(:,2) = [(xp_t(2)-pos_radioA(2))/(vecnorm(xp_t(1:2)-pos_radioA)),...
+          (xp_t(2)-pos_radioB(2))/(vecnorm(xp_t(1:2)-pos_radioB)),...
+          (xp_t(2)-pos_radioC(2))/(vecnorm(xp_t(1:2)-pos_radioC)),0,0];
 H(:,3) = [0,0,0,1,1];
 H(:,4) = [0,0,0,0,0];
 H(:,5) = [0,0,0,0,0];
@@ -172,15 +179,14 @@ end
 R = diag(R);
 
 % compute K(h)
-%Ppt = diag((diag(reshape(var(end,:),[6,6]))));
-Ppt = reshape(var(end,:),[6,6]); %DEBUG
-K = Ppt*transpose(H)/(H*Ppt*transpose(H)+M*R*transpose(M) + eye(size(M)) * rand());
+Ppt = var; %DEBUG
+K = Ppt*transpose(H)/(H*Ppt*transpose(H)+M*R*transpose(M));%+ eye(size(M)) * rand());
 
 
 % measurement update
 estState.xm = xp_t+(z-h)*transpose(K);
 %estState.Pm = (eye(6,6)-K*H)*Ppt;%DEBUG
-estState.Pm = diag(diag((eye(6,6)-K*H)*Ppt));
+estState.Pm = (eye(6,6)-K*H)*Ppt;
 
 %estState.xm(3)= mod(estState.xm(3),2*pi);
 
@@ -201,9 +207,6 @@ driftVar = estState.Pm(6,6);
 %linVelVar = estState.Pm(4:5);
 %oriVar = estState.Pm(3);
 %driftVar = estState.Pm(6);
-
-
-
 
 end
 
@@ -240,15 +243,43 @@ dvardt = dpdt(:);
 
 end
 
-function dydt = Xp(t,y,Cr,Cd,ur,ut)
+function dydt = ODEeq(t,y,Cr,Cd,ur,ut,Q)
 %odefcn function to return ode solution of process states
-dydt = zeros(6,1);
+%state vector computation
+dydt = zeros(42,1);
 dydt(1)=y(4);
 dydt(2)=y(5);
 dydt(3)=Cr*ur;
 dydt(4)=cos(y(3))*(tanh(ut)-Cd*(y(4)^2+y(5)^2));
 dydt(5)=sin(y(3))*(tanh(ut)-Cd*(y(4)^2+y(5)^2));
 dydt(6)=0.0;
+
+pp = reshape(y(7:end),[6,6]);
+%create matrix A
+A=zeros(6,6);
+A(1,:) = [0,0,0,1,0,0];
+A(2,:) = [0,0,0,0,1,0];
+A(3,:) = [0,0,0,0,0,0];
+A(4,:) = [0,0,-sin(y(3))*(tanh(ut)-Cd*(y(4)^2+y(5)^2)),-cos(y(3))*2*Cd*y(4),-cos(y(3))*2*Cd*y(5),0];
+A(5,:) = [0,0,cos(y(3))*(tanh(ut)-Cd*(y(4)^2+y(5)^2)),-sin(y(3))*2*Cd*y(4),-sin(y(3))*2*Cd*y(5),0];
+A(6,:) = [0,0,0,0,0,0];
+
+%A_sparse = blkdiag(A(1,:),A(2,:),A(3,:),A(4,:),A(5,:),A(6,:));
+A = transpose(A);
+
+%create matrix L
+%compute L
+L = zeros(6,3);
+L(1,:) = [0,0,0];
+L(2,:) = [0,0,0];
+L(3,:) = [Cr*ur,0,0];
+L(4,:) = [0,-cos(y(3))*Cd*(y(4)^2+y(5)^2),0];
+L(5,:) = [0,-sin(y(3))*Cd*(y(4)^2+y(5)^2),0];
+L(6,:) = [0,0,1];
+
+temp = A*pp+pp*transpose(pp)+L*Q*transpose(L);
+dydt(7:end) = temp(:);
+%compute coefficient
 end
 
 function pos = randPos(rMax)
